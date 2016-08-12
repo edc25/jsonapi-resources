@@ -49,10 +49,12 @@ ActiveRecord::Schema.define do
 
   create_table :tags, force: true do |t|
     t.string :name
+    t.timestamps null: false
   end
 
   create_table :sections, force: true do |t|
     t.string :name
+    t.timestamps null: false
   end
 
   create_table :posts_tags, force: true do |t|
@@ -83,6 +85,7 @@ ActiveRecord::Schema.define do
     t.integer :employee_id, null: false
     t.decimal :cost, precision: 12, scale: 4, null: false
     t.date :transaction_date
+    t.timestamps null: false
   end
 
   create_table :planets, force: true do |t|
@@ -104,17 +107,20 @@ ActiveRecord::Schema.define do
     t.string  :name
     t.string  :description
     t.integer :planet_id
+    t.timestamps null: false
   end
 
   create_table :craters, id: false, force: true do |t|
     t.string  :code
     t.string  :description
     t.integer :moon_id
+    t.timestamps null: false
   end
 
   create_table :preferences, force: true do |t|
     t.integer :person_id
     t.boolean :advanced_mode, default: false
+    t.timestamps null: false
   end
 
   create_table :facts, force: true do |t|
@@ -128,12 +134,14 @@ ActiveRecord::Schema.define do
     t.time     :bedtime
     t.binary   :photo, limit: 1.kilobyte
     t.boolean  :cool
+    t.timestamps null: false
   end
 
   create_table :books, force: true do |t|
     t.string :title
     t.string :isbn
     t.boolean :banned, default: false
+    t.timestamps null: false
   end
 
   create_table :book_authors, force: true do |t|
@@ -151,6 +159,7 @@ ActiveRecord::Schema.define do
 
   create_table :customers, force: true do |t|
     t.string   :name
+    t.timestamps null: false
   end
 
   create_table :purchase_orders, force: true do |t|
@@ -199,6 +208,7 @@ ActiveRecord::Schema.define do
   create_table :categories, force: true do |t|
     t.string :name
     t.string :status, limit: 10
+    t.timestamps null: false
   end
 
   create_table :pictures, force: true do |t|
@@ -226,10 +236,12 @@ ActiveRecord::Schema.define do
     t.string :drive_layout
     t.string :serial_number
     t.integer :person_id
+    t.timestamps null: false
   end
 
   create_table :makes, force: true do |t|
     t.string :model
+    t.timestamps null: false
   end
 
   create_table :accounts, force: true do |t|
@@ -240,18 +252,22 @@ ActiveRecord::Schema.define do
   # special cases - fields that look like they should be reserved names
   create_table :hrefs, force: true do |t|
     t.string :name
+    t.timestamps null: false
   end
 
   create_table :links, force: true do |t|
     t.string :name
+    t.timestamps null: false
   end
 
   create_table :web_pages, force: true do |t|
     t.string :href
     t.string :link
+    t.timestamps null: false
   end
 
   create_table :questionables, force: true do |t|
+    t.timestamps null: false
   end
   # special cases
 end
@@ -267,6 +283,9 @@ class Person < ActiveRecord::Base
   has_one :author_detail
 
   has_and_belongs_to_many :books, join_table: :book_authors
+
+  has_many :even_posts, -> { where('posts.id % 2 = 0') }, class_name: 'Post', foreign_key: 'author_id'
+  has_many :odd_posts, -> { where('posts.id % 2 = 1') }, class_name: 'Post', foreign_key: 'author_id'
 
   ### Validations
   validates :name, presence: true
@@ -330,6 +349,7 @@ class Tag < ActiveRecord::Base
 end
 
 class Section < ActiveRecord::Base
+  has_many :posts
 end
 
 class HairCut < ActiveRecord::Base
@@ -376,7 +396,7 @@ class Planet < ActiveRecord::Base
         return false
       end
       # :nocov:
-   end
+    end
   end
 end
 
@@ -704,6 +724,9 @@ module Api
     end
 
     class CratersController < JSONAPI::ResourceController
+      def context
+        {current_user: $test_user}
+      end
     end
 
     class LikesController < JSONAPI::ResourceController
@@ -773,6 +796,12 @@ module Api
   end
 
   module V6
+    class PostsController < JSONAPI::ResourceController
+    end
+
+    class SectionsController < JSONAPI::ResourceController
+    end
+
     class CustomersController < JSONAPI::ResourceController
     end
 
@@ -842,6 +871,13 @@ class PersonResource < BaseResource
     return values
   end
 
+end
+
+class PersonWithEvenAndOddPostsResource < JSONAPI::Resource
+  model_name 'Person'
+
+  has_many :even_posts, foreign_key: 'author_id', class_name: 'Post', relation_name: :even_posts
+  has_many :odd_posts, foreign_key: 'author_id', class_name: 'Post', relation_name: :odd_posts
 end
 
 class SpecialBaseResource < BaseResource
@@ -916,8 +952,8 @@ class PostResource < JSONAPI::Resource
 
   has_one :author, class_name: 'Person'
   has_one :section
-  has_many :tags, acts_as_set: true, eager_load_on_include: false
-  has_many :comments, acts_as_set: false
+  has_many :tags, acts_as_set: true, inverse_relationship: :posts, eager_load_on_include: false
+  has_many :comments, acts_as_set: false, inverse_relationship: :post
 
   # Not needed - just for testing
   primary_key :id
@@ -998,7 +1034,7 @@ class PostResource < JSONAPI::Resource
   def self.sortable_fields(context)
     super(context) - [:id] + [:"author.name"]
   end
- 
+
   def self.verify_key(key, context = nil)
     super(key)
     raise JSONAPI::Exceptions::RecordNotFound.new(key) unless find_by_key(key, context: context)
@@ -1065,7 +1101,7 @@ class PlanetResource < JSONAPI::Resource
 
   has_many :tags, acts_as_set: true
 
-  def records_for_moons
+  def records_for_moons(opts = {})
     Moon.joins(:craters).select('moons.*, craters.code').distinct
   end
 end
@@ -1078,7 +1114,7 @@ end
 
 class PlanetTypeResource < JSONAPI::Resource
   attributes :name
-  has_many :planets
+  has_many :planets, inverse_relationship: :planet_type
 end
 
 class MoonResource < JSONAPI::Resource
@@ -1095,6 +1131,11 @@ class CraterResource < JSONAPI::Resource
 
   has_one :moon
 
+  filter :description, apply: -> (records, value, options) {
+    fail "context not set" unless options[:context][:current_user] != nil && options[:context][:current_user] == $test_user
+    records.where(:description => value)
+  }
+
   def self.verify_key(key, context = nil)
     key && String(key)
   end
@@ -1105,8 +1146,8 @@ class PreferencesResource < JSONAPI::Resource
 
   has_one :author, :foreign_key_on => :related
 
-  def self.find_by_key(key, options = {})
-    new(Preferences.first, nil)
+  def self.find_records(filters, options = {})
+    Preferences.limit(1)
   end
 end
 
@@ -1160,10 +1201,12 @@ end
 class AuthorResource < JSONAPI::Resource
   model_name 'Person'
   attributes :name
+
+  has_many :books, inverse_relationship: :authors
 end
 
 class BookResource < JSONAPI::Resource
-  has_many :authors, class_name: 'Author'
+  has_many :authors, class_name: 'Author', inverse_relationship: :books
 end
 
 class AuthorDetailResource < JSONAPI::Resource
@@ -1291,6 +1334,10 @@ module Api
       has_one :section
       has_many :comments, acts_as_set: false
 
+      def self.default_sort
+        [{field: 'title', direction: :asc}, {field: 'id', direction: :desc}]
+      end
+
       def subject
         @model.title
       end
@@ -1328,6 +1375,8 @@ module Api
       attribute :title
       attributes :isbn, :banned
 
+      has_many :authors
+
       has_many :book_comments, relation_name: -> (options = {}) {
         context = options[:context]
         current_user = context ? context[:current_user] : nil
@@ -1337,7 +1386,7 @@ module Api
         else
           :book_comments
         end
-      }
+      }, reflect: true
 
       has_many :aliased_comments, class_name: 'BookComments', relation_name: :approved_book_comments
 
@@ -1446,24 +1495,16 @@ module Api
 
       filter :name
 
-      def self.find_by_key(key, options = {})
-        context = options[:context]
-        records = records(options)
-        records = apply_includes(records, options)
-        model = records.where({_primary_key => key}).first
-        fail JSONAPI::Exceptions::RecordNotFound.new(key) if model.nil?
-        self.new(model, context)
-      end
-
-      def self.find(filters, options = {})
-        resources = []
-
+      def self.find_records(filters, options = {})
+        rel = _model_class
         filters.each do |attr, filter|
-          _model_class.where("\"#{attr}\" LIKE \"%#{filter[0]}%\"").each do |model|
-            resources.push self.new(model, options[:context])
+          if attr.to_s == "id"
+            rel = rel.where(id: filter)
+          else
+            rel = rel.where("\"#{attr}\" LIKE \"%#{filter[0]}%\"")
           end
         end
-        return resources
+        rel
       end
 
       def fetchable_fields
@@ -1488,6 +1529,22 @@ end
 
 module Api
   module V6
+    class PersonResource < PersonResource; end
+    class TagResource < TagResource; end
+
+    class SectionResource < SectionResource
+      has_many :posts
+    end
+
+    class CommentResource < CommentResource; end
+
+    class PostResource < PostResource
+      # Test caching with SQL fragments
+      def self.records(options = {})
+        super.joins('INNER JOIN people on people.id = author_id')
+      end
+    end
+
     class CustomerResource < JSONAPI::Resource
       attribute :name
 
@@ -1518,7 +1575,8 @@ module Api
                             else
                               :admin_line_items
                             end
-                          }
+                          },
+               reflect: false
 
       has_many :order_flags, acts_as_set: true,
                relation_name: -> (options = {}) {
@@ -1536,7 +1594,7 @@ module Api
     class OrderFlagResource < JSONAPI::Resource
       attributes :name
 
-      has_many :purchase_orders
+      has_many :purchase_orders, reflect: false
     end
 
     class LineItemResource < JSONAPI::Resource
@@ -1555,8 +1613,6 @@ module Api
 
     class CustomerResource < V6::CustomerResource
       model_name 'Api::V7::Customer'
-      attribute :name
-      has_many :purchase_orders
     end
 
     class ClientResource < JSONAPI::Resource

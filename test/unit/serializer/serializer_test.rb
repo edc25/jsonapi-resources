@@ -536,7 +536,7 @@ class SerializerTest < ActionDispatch::IntegrationTest
     serialized_data = JSONAPI::ResourceSerializer.new(
       ParentApi::PostResource,
       include: ['parent_post'],
-      base_url: 'http://example.com').serialize_to_hash(ordered_posts.map {|p| ParentApi::PostResource.new(p, nil)} 
+      base_url: 'http://example.com').serialize_to_hash(ordered_posts.map {|p| ParentApi::PostResource.new(p, nil)}
     )[:data]
 
     assert_equal(3, serialized_data.length)
@@ -545,7 +545,7 @@ class SerializerTest < ActionDispatch::IntegrationTest
     assert_equal("3", serialized_data[2]["id"])
   end
 
- 
+
   def test_serializer_different_foreign_key
     serialized = JSONAPI::ResourceSerializer.new(
       PersonResource,
@@ -1435,7 +1435,7 @@ class SerializerTest < ActionDispatch::IntegrationTest
           id: '1',
           attributes: {
             transactionDate: '04/15/2014',
-            cost: 12.05
+            cost: '12.05'
           },
           links: {
             self: '/expenseEntries/1'
@@ -1680,10 +1680,10 @@ class SerializerTest < ActionDispatch::IntegrationTest
             spouse_name: 'Jane Author',
             bio: 'First man to run across Antartica.',
             quality_rating: 23.89/45.6,
-            salary: BigDecimal('47000.56', 30),
-            date_time_joined: DateTime.parse('2013-08-07 20:25:00 UTC +00:00'),
-            birthday: Date.parse('1965-06-30'),
-            bedtime: Time.parse('2000-01-01 20:00:00 UTC +00:00'), #DB seems to set the date to 2001-01-01 for time types
+            salary: BigDecimal('47000.56', 30).as_json,
+            date_time_joined: DateTime.parse('2013-08-07 20:25:00 UTC +00:00').in_time_zone('UTC').as_json,
+            birthday: Date.parse('1965-06-30').as_json,
+            bedtime: Time.parse('2000-01-01 20:00:00 UTC +00:00').as_json, #DB seems to set the date to 2000-01-01 for time types
             photo: "abc",
             cool: false
           },
@@ -2143,7 +2143,7 @@ class SerializerTest < ActionDispatch::IntegrationTest
             title: "New post",
             body: "A body!!!",
             subject: "New post",
-            createdAt: post_created_at
+            createdAt: post_created_at.as_json
           },
         links: {
           self: "http://example.com/customLinkWithLambdas/1",
@@ -2175,5 +2175,225 @@ class SerializerTest < ActionDispatch::IntegrationTest
     assert_hash_equals(custom_link_spec, serialized_custom_link_resource)
   end
 
+  def test_includes_two_relationships_with_same_foreign_key
+    serialized_resource = JSONAPI::ResourceSerializer
+      .new(PersonWithEvenAndOddPostsResource, include: ['even_posts','odd_posts'])
+      .serialize_to_hash(PersonWithEvenAndOddPostsResource.new(Person.find(1), nil))
+
+    assert_hash_equals(
+      {
+        data: {
+          id: "1",
+          type: "personWithEvenAndOddPosts",
+          links: {
+            self: "/personWithEvenAndOddPosts/1"
+          },
+          relationships: {
+            evenPosts: {
+              links: {
+                self: "/personWithEvenAndOddPosts/1/relationships/evenPosts",
+                related: "/personWithEvenAndOddPosts/1/evenPosts"
+              },
+              data: [
+                {
+                  type: "posts",
+                  id: "2"
+                }
+              ]
+            },
+            oddPosts: {
+              links: {
+                self: "/personWithEvenAndOddPosts/1/relationships/oddPosts",
+                related: "/personWithEvenAndOddPosts/1/oddPosts"
+              },
+              data:[
+                {
+                  type: "posts",
+                  id: "1"
+                },
+                {
+                  type: "posts",
+                  id: "11"
+                }
+              ]
+            }
+          }
+        },
+        included:[
+          {
+            id: "2",
+            type: "posts",
+            links: {
+              self: "/posts/2"
+            },
+            attributes: {
+              title: "JR Solves your serialization woes!",
+              body: "Use JR",
+              subject: "JR Solves your serialization woes!"
+            },
+            relationships: {
+              author: {
+                links: {
+                  self: "/posts/2/relationships/author",
+                  related: "/posts/2/author"
+                }
+              },
+              section: {
+                links: {
+                  self: "/posts/2/relationships/section",
+                  related: "/posts/2/section"
+                }
+              },
+              tags: {
+                links: {
+                  self: "/posts/2/relationships/tags",
+                  related: "/posts/2/tags"
+                }
+              },
+              comments: {
+                links: {
+                  self: "/posts/2/relationships/comments",
+                  related: "/posts/2/comments"
+                }
+              }
+            }
+          },
+          {
+            id: "1",
+            type: "posts",
+            links: {
+              self: "/posts/1"
+            },
+            attributes: {
+              title: "New post",
+              body: "A body!!!",
+              subject: "New post"
+            },
+            relationships: {
+              author: {
+                links: {
+                  self: "/posts/1/relationships/author",
+                  related: "/posts/1/author"
+                }
+              },
+              section: {
+                links: {
+                  self: "/posts/1/relationships/section",
+                  related: "/posts/1/section"
+                }
+              },
+              tags: {
+                links: {
+                  self: "/posts/1/relationships/tags",
+                  related: "/posts/1/tags"
+                }
+              },
+              comments: {
+                links: {
+                  self: "/posts/1/relationships/comments",
+                  related: "/posts/1/comments"
+                }
+              }
+            }
+          },
+          {
+            id: "11",
+            type: "posts",
+            links: {
+              self: "/posts/11"
+            },
+            attributes: {
+              title: "JR How To",
+              body: "Use JR to write API apps",
+              subject: "JR How To"
+            },
+            relationships: {
+              author: {
+                links: {
+                  self: "/posts/11/relationships/author",
+                  related: "/posts/11/author"
+                }
+              },
+              section: {
+                links: {
+                  self: "/posts/11/relationships/section",
+                  related: "/posts/11/section"
+                }
+              },
+              tags: {
+                links: {
+                  self: "/posts/11/relationships/tags",
+                  related: "/posts/11/tags"
+                }
+              },
+              comments: {
+                links: {
+                  self: "/posts/11/relationships/comments",
+                  related: "/posts/11/comments"
+                }
+              }
+            }
+          }
+        ]
+      },
+      serialized_resource
+    )
+  end
+
+  def test_config_keys_stable
+    (serializer_a, serializer_b) = 2.times.map do
+      JSONAPI::ResourceSerializer.new(
+        PostResource,
+        include: ['comments', 'author', 'comments.tags', 'author.posts'],
+        fields: {
+          people: [:email, :comments],
+          posts: [:title],
+          tags: [:name],
+          comments: [:body, :post]
+        }
+      )
+    end
+
+    assert_equal serializer_a.config_key(PostResource), serializer_b.config_key(PostResource)
+  end
+
+  def test_config_keys_vary_with_relevant_config_changes
+    serializer_a = JSONAPI::ResourceSerializer.new(
+      PostResource,
+      fields: { posts: [:title] }
+    )
+    serializer_b = JSONAPI::ResourceSerializer.new(
+      PostResource,
+      fields: { posts: [:title, :body] }
+    )
+
+    assert_not_equal serializer_a.config_key(PostResource), serializer_b.config_key(PostResource)
+  end
+
+  def test_config_keys_stable_with_irrelevant_config_changes
+    serializer_a = JSONAPI::ResourceSerializer.new(
+      PostResource,
+      fields: { posts: [:title, :body], people: [:name, :email] }
+    )
+    serializer_b = JSONAPI::ResourceSerializer.new(
+      PostResource,
+      fields: { posts: [:title, :body], people: [:name] }
+    )
+
+    assert_equal serializer_a.config_key(PostResource), serializer_b.config_key(PostResource)
+  end
+
+  def test_config_keys_stable_with_different_primary_resource
+    serializer_a = JSONAPI::ResourceSerializer.new(
+      PostResource,
+      fields: { posts: [:title, :body], people: [:name, :email] }
+    )
+    serializer_b = JSONAPI::ResourceSerializer.new(
+      PersonResource,
+      fields: { posts: [:title, :body], people: [:name, :email] }
+    )
+
+    assert_equal serializer_a.config_key(PostResource), serializer_b.config_key(PostResource)
+  end
 
 end
