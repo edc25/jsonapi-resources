@@ -1,10 +1,6 @@
 module JSONAPI
   module Exceptions
-    class Error < RuntimeError
-      def errors
-        raise NotImplementedError, "Subclass of Error must implement errors method"
-      end
-    end
+    class Error < RuntimeError; end
 
     class InternalServerError < Error
       attr_accessor :exception

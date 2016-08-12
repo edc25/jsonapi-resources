@@ -66,20 +66,17 @@ module JSONAPI
       unless @request.errors.empty?
         render_errors(@request.errors)
       else
-        operations = @request.operations
-        unless JSONAPI.configuration.resource_cache.nil?
-          operations.each {|op| op.options[:cache_serializer] = resource_serializer }
-        end
-        results = process_operations(operations)
-        render_results(results)
+        process_operations
+        render_results(@operation_results)
       end
+
     rescue => e
       handle_exceptions(e)
     end
 
-    def process_operations(operations)
+    def process_operations
       run_callbacks :process_operations do
-        operation_dispatcher.process(operations)
+        @operation_results = operation_dispatcher.process(@request.operations)
       end
     end
 
@@ -113,19 +110,6 @@ module JSONAPI
       @resource_serializer_klass ||= JSONAPI::ResourceSerializer
     end
 
-    def resource_serializer
-      @resource_serializer ||= resource_serializer_klass.new(
-        resource_klass,
-        include_directives: @request ? @request.include_directives : nil,
-        fields: @request ? @request.fields : {},
-        base_url: base_url,
-        key_formatter: key_formatter,
-        route_formatter: route_formatter,
-        serialization_options: serialization_options
-      )
-      @resource_serializer
-    end
-
     def base_url
       @base_url ||= request.protocol + request.host_with_port
     end
@@ -143,20 +127,26 @@ module JSONAPI
     end
 
     def ensure_valid_accept_media_type
-      unless valid_accept_media_type?
+      if invalid_accept_media_type?
         fail JSONAPI::Exceptions::NotAcceptableError.new(request.accept)
       end
     rescue => e
       handle_exceptions(e)
     end
 
-    def valid_accept_media_type?
+    def invalid_accept_media_type?
       media_types = media_types_for('Accept')
 
-      media_types.blank? ||
-          media_types.any? do |media_type|
-            (media_type == JSONAPI::MEDIA_TYPE || media_type == ALL_MEDIA_TYPES)
-          end
+      return false if media_types.blank? || media_types.include?(ALL_MEDIA_TYPES)
+
+      jsonapi_media_types = media_types.select do |media_type|
+        media_type.include?(JSONAPI::MEDIA_TYPE)
+      end
+
+      jsonapi_media_types.size.zero? ||
+        jsonapi_media_types.none? do |media_type|
+          media_type == JSONAPI::MEDIA_TYPE
+        end
     end
 
     def media_types_for(header)
@@ -215,24 +205,16 @@ module JSONAPI
 
     def render_results(operation_results)
       response_doc = create_response_document(operation_results)
-      content = response_doc.contents
 
-      render_options = {}
-      if operation_results.has_errors?
-        render_options[:json] = content
-      else
-        # Bypasing ActiveSupport allows us to use CompiledJson objects for cached response fragments
-        render_options[:body] = JSON.generate(content)
-      end
+      render_options = {
+        status: response_doc.status,
+        json:   response_doc.contents,
+        content_type: JSONAPI::MEDIA_TYPE
+      }
 
-      render_options[:location] = content[:data]["links"][:self] if (
-        response_doc.status == :created && content[:data].class != Array
+      render_options[:location] = response_doc.contents[:data]["links"][:self] if (
+        response_doc.status == :created && response_doc.contents[:data].class != Array
       )
-
-      # For whatever reason, `render` ignores :status and :content_type when :body is set.
-      # But, we can just set those values directly in the Response object instead.
-      response.status = response_doc.status
-      response.headers['Content-Type'] = JSONAPI::MEDIA_TYPE
 
       render(render_options)
     end
@@ -240,11 +222,17 @@ module JSONAPI
     def create_response_document(operation_results)
       JSONAPI::ResponseDocument.new(
         operation_results,
-        operation_results.has_errors? ? nil : resource_serializer,
+        primary_resource_klass: resource_klass,
+        include_directives: @request ? @request.include_directives : nil,
+        fields: @request ? @request.fields : nil,
+        base_url: base_url,
         key_formatter: key_formatter,
+        route_formatter: route_formatter,
         base_meta: base_meta,
         base_links: base_response_links,
-        request: @request
+        resource_serializer_klass: resource_serializer_klass,
+        request: @request,
+        serialization_options: serialization_options
       )
     end
 

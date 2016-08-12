@@ -17,7 +17,7 @@ module JSONAPI
       @operations = []
       @fields = {}
       @filters = {}
-      @sort_criteria = nil
+      @sort_criteria = [{ field: 'id', direction: :asc }]
       @source_klass = nil
       @source_id = nil
       @include_directives = nil
@@ -350,8 +350,7 @@ module JSONAPI
         relationship_type: relationship_type,
         source_klass: @source_klass,
         source_id: @source_id,
-        fields: @fields,
-        include_directives: @include_directives
+        fields: @fields
       )
     end
 
@@ -365,8 +364,7 @@ module JSONAPI
         filters: @source_klass.verify_filters(@filters, @context),
         sort_criteria: @sort_criteria,
         paginator: @paginator,
-        fields: @fields,
-        include_directives: @include_directives
+        fields: @fields
       )
     end
 
@@ -390,8 +388,7 @@ module JSONAPI
           @resource_klass,
           context: @context,
           data: data,
-          fields: @fields,
-          include_directives: @include_directives
+          fields: @fields
         )
       end
     rescue JSONAPI::Exceptions::Error => e
@@ -708,8 +705,7 @@ module JSONAPI
         context: @context,
         resource_id: key,
         data: parse_params(data, updatable_fields),
-        fields: @fields,
-        include_directives: @include_directives
+        fields: @fields
       )
     end
 
