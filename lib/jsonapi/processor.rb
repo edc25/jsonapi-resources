@@ -172,12 +172,12 @@ module JSONAPI
       rel_opts = {
         filters:  filters,
         sort_criteria: sort_criteria,
+        context: context,
         paginator: paginator,
         fields: fields,
         context: context,
         include_directives: include_directives
       }
-                                                      context: context,
 
       related_resources = nil
       if params[:cache_serializer]
