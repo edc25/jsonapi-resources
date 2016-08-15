@@ -1,4 +1,5 @@
 require 'jsonapi/callbacks'
+require 'jsonapi/relationship_builder'
 
 module JSONAPI
   class Resource
@@ -22,6 +23,9 @@ module JSONAPI
     def initialize(model, context)
       @model = model
       @context = context
+      @reload_needed = false
+      @changing = false
+      @save_needed = false
     end
 
     def _model
@@ -63,39 +67,39 @@ module JSONAPI
       end
     end
 
-    def create_to_many_links(relationship_type, relationship_key_values)
+    def create_to_many_links(relationship_type, relationship_key_values, options = {})
       change :create_to_many_link do
-        _create_to_many_links(relationship_type, relationship_key_values)
+        _create_to_many_links(relationship_type, relationship_key_values, options)
       end
     end
 
-    def replace_to_many_links(relationship_type, relationship_key_values)
+    def replace_to_many_links(relationship_type, relationship_key_values, options = {})
       change :replace_to_many_links do
-        _replace_to_many_links(relationship_type, relationship_key_values)
+        _replace_to_many_links(relationship_type, relationship_key_values, options)
       end
     end
 
-    def replace_to_one_link(relationship_type, relationship_key_value)
+    def replace_to_one_link(relationship_type, relationship_key_value, options = {})
       change :replace_to_one_link do
-        _replace_to_one_link(relationship_type, relationship_key_value)
+        _replace_to_one_link(relationship_type, relationship_key_value, options)
       end
     end
 
-    def replace_polymorphic_to_one_link(relationship_type, relationship_key_value, relationship_key_type)
+    def replace_polymorphic_to_one_link(relationship_type, relationship_key_value, relationship_key_type, options = {})
       change :replace_polymorphic_to_one_link do
-        _replace_polymorphic_to_one_link(relationship_type, relationship_key_value, relationship_key_type)
+        _replace_polymorphic_to_one_link(relationship_type, relationship_key_value, relationship_key_type, options)
       end
     end
 
-    def remove_to_many_link(relationship_type, key)
+    def remove_to_many_link(relationship_type, key, options = {})
       change :remove_to_many_link do
-        _remove_to_many_link(relationship_type, key)
+        _remove_to_many_link(relationship_type, key, options)
       end
     end
 
-    def remove_to_one_link(relationship_type)
+    def remove_to_one_link(relationship_type, options = {})
       change :remove_to_one_link do
-        _remove_to_one_link(relationship_type)
+        _remove_to_one_link(relationship_type, options)
       end
     end
 
@@ -224,6 +228,7 @@ module JSONAPI
 
       if defined? @model.save
         saved = @model.save(validate: false)
+
         unless saved
           if @model.errors.present?
             fail JSONAPI::Exceptions::ValidationErrors.new(self)
@@ -234,6 +239,8 @@ module JSONAPI
       else
         saved = true
       end
+      @model.reload if @reload_needed
+      @reload_needed = false
 
       @save_needed = !saved
 
@@ -250,34 +257,87 @@ module JSONAPI
       fail JSONAPI::Exceptions::RecordLocked.new(e.message)
     end
 
-    def _create_to_many_links(relationship_type, relationship_key_values)
+    def reflect_relationship?(relationship, options)
+      return false if !relationship.reflect ||
+        (!JSONAPI.configuration.use_relationship_reflection || options[:reflected_source])
+
+      inverse_relationship = relationship.resource_klass._relationships[relationship.inverse_relationship]
+      if inverse_relationship.nil?
+        warn "Inverse relationship could not be found for #{self.class.name}.#{relationship.name}. Relationship reflection disabled."
+        return false
+      end
+      true
+    end
+
+    def _create_to_many_links(relationship_type, relationship_key_values, options)
       relationship = self.class._relationships[relationship_type]
 
-      relationship_key_values.each do |relationship_key_value|
-        related_resource = relationship.resource_klass.find_by_key(relationship_key_value, context: @context)
+      # check if relationship_key_values are already members of this relationship
+      relation_name = relationship.relation_name(context: @context)
+      existing_relations = @model.public_send(relation_name).where(relationship.primary_key => relationship_key_values)
+      if existing_relations.count > 0
+        # todo: obscure id so not to leak info
+        fail JSONAPI::Exceptions::HasManyRelationExists.new(existing_relations.first.id)
+      end
 
-        relation_name = relationship.relation_name(context: @context)
-        # TODO: Add option to skip relations that already exist instead of returning an error?
-        relation = @model.public_send(relation_name).where(relationship.primary_key => relationship_key_value).first
-        if relation.nil?
-          @model.public_send(relation_name) << related_resource._model
+      if options[:reflected_source]
+        @model.public_send(relation_name) << options[:reflected_source]._model
+        return :completed
+      end
+
+      # load requested related resources
+      # make sure they all exist (also based on context) and add them to relationship
+
+      related_resources = relationship.resource_klass.find_by_keys(relationship_key_values, context: @context)
+
+      if related_resources.count != relationship_key_values.count
+        # todo: obscure id so not to leak info
+        fail JSONAPI::Exceptions::RecordNotFound.new('unspecified')
+      end
+
+      reflect = reflect_relationship?(relationship, options)
+
+      related_resources.each do |related_resource|
+        if reflect
+          if related_resource.class._relationships[relationship.inverse_relationship].is_a?(JSONAPI::Relationship::ToMany)
+            related_resource.create_to_many_links(relationship.inverse_relationship, [id], reflected_source: self)
+          else
+            related_resource.replace_to_one_link(relationship.inverse_relationship, id, reflected_source: self)
+          end
+          @reload_needed = true
         else
-          fail JSONAPI::Exceptions::HasManyRelationExists.new(relationship_key_value)
+          @model.public_send(relation_name) << related_resource._model
         end
       end
 
       :completed
     end
 
-    def _replace_to_many_links(relationship_type, relationship_key_values)
+    def _replace_to_many_links(relationship_type, relationship_key_values, options)
       relationship = self.class._relationships[relationship_type]
-      send("#{relationship.foreign_key}=", relationship_key_values)
-      @save_needed = true
+
+      reflect = reflect_relationship?(relationship, options)
+
+      if reflect
+        existing = send("#{relationship.foreign_key}")
+        to_delete = existing - (relationship_key_values & existing)
+        to_delete.each do |key|
+          _remove_to_many_link(relationship_type, key, reflected_source: self)
+        end
+
+        to_add = relationship_key_values - (relationship_key_values & existing)
+        _create_to_many_links(relationship_type, to_add, {})
+
+        @reload_needed = true
+      else
+        send("#{relationship.foreign_key}=", relationship_key_values)
+        @save_needed = true
+      end
 
       :completed
     end
 
-    def _replace_to_one_link(relationship_type, relationship_key_value)
+    def _replace_to_one_link(relationship_type, relationship_key_value, options)
       relationship = self.class._relationships[relationship_type]
 
       send("#{relationship.foreign_key}=", relationship_key_value)
@@ -286,7 +346,7 @@ module JSONAPI
       :completed
     end
 
-    def _replace_polymorphic_to_one_link(relationship_type, key_value, key_type)
+    def _replace_polymorphic_to_one_link(relationship_type, key_value, key_type, options)
       relationship = self.class._relationships[relationship_type.to_sym]
 
       _model.public_send("#{relationship.foreign_key}=", key_value)
@@ -297,10 +357,29 @@ module JSONAPI
       :completed
     end
 
-    def _remove_to_many_link(relationship_type, key)
-      relation_name = self.class._relationships[relationship_type].relation_name(context: @context)
+    def _remove_to_many_link(relationship_type, key, options)
+      relationship = self.class._relationships[relationship_type]
 
-      @model.public_send(relation_name).delete(key)
+      reflect = reflect_relationship?(relationship, options)
+
+      if reflect
+
+        related_resource = relationship.resource_klass.find_by_key(key, context: @context)
+
+        if related_resource.nil?
+          fail JSONAPI::Exceptions::RecordNotFound.new(key)
+        else
+          if related_resource.class._relationships[relationship.inverse_relationship].is_a?(JSONAPI::Relationship::ToMany)
+            related_resource.remove_to_many_link(relationship.inverse_relationship, id, reflected_source: self)
+          else
+            related_resource.remove_to_one_link(relationship.inverse_relationship, reflected_source: self)
+          end
+        end
+
+        @reload_needed = true
+      else
+        @model.public_send(relationship.relation_name(context: @context)).delete(key)
+      end
 
       :completed
 
@@ -310,7 +389,7 @@ module JSONAPI
       fail JSONAPI::Exceptions::RecordNotFound.new(key)
     end
 
-    def _remove_to_one_link(relationship_type)
+    def _remove_to_one_link(relationship_type, options)
       relationship = self.class._relationships[relationship_type]
 
       send("#{relationship.foreign_key}=", nil)
@@ -441,6 +520,8 @@ module JSONAPI
           ActiveSupport::Deprecation.warn('Id without format is no longer supported. Please remove ids from attributes, or specify a format.')
         end
 
+        check_duplicate_attribute_name(attr) if options[:format].nil?
+
         @_attributes ||= {}
         @_attributes[attr] = options
         define_method attr do
@@ -474,7 +555,7 @@ module JSONAPI
       def has_one(*attrs)
         _add_relationship(Relationship::ToOne, *attrs)
       end
-      
+
       def belongs_to(*attrs)
         ActiveSupport::Deprecation.warn "In #{name} you exposed a `has_one` relationship "\
                                         " using the `belongs_to` class method. We think `has_one`" \
@@ -707,14 +788,20 @@ module JSONAPI
       end
 
       def resources_for(records, context)
-        resources = []
-        resource_classes = {}
-        records.each do |model|
-          resource_class = resource_classes[model.class] ||= self.resource_for_model(model)
-          resources.push resource_class.new(model, context)
+        records.collect do |model|
+          resource_class = self.resource_for_model(model)
+          resource_class.new(model, context)
         end
+      end
 
-        resources
+      def find_by_keys(keys, options = {})
+        context = options[:context]
+        records = records(options)
+        records = apply_includes(records, options)
+        models = records.where({_primary_key => keys})
+        models.collect do |model|
+          self.resource_for_model(model).new(model, context)
+        end
       end
 
       def find_by_key(key, options = {})
@@ -906,11 +993,17 @@ module JSONAPI
         end
       end
 
+      def default_sort
+        [{field: 'id', direction: :asc}]
+      end
+
       def construct_order_options(sort_params)
+        sort_params ||= default_sort
+
         return {} unless sort_params
 
         sort_params.each_with_object({}) do |sort, order_hash|
-          field = sort[:field] == 'id' ? _primary_key : sort[:field]
+          field = sort[:field].to_s == 'id' ? _primary_key : sort[:field].to_s
           order_hash[field] = sort[:direction]
         end
       end
@@ -919,117 +1012,22 @@ module JSONAPI
         options = attrs.extract_options!
         options[:parent_resource] = self
 
-        attrs.each do |attr|
-          relationship_name = attr.to_sym
-
+        attrs.each do |relationship_name|
           check_reserved_relationship_name(relationship_name)
+          check_duplicate_relationship_name(relationship_name)
 
-          # Initialize from an ActiveRecord model's properties
-          if _model_class && _model_class.ancestors.collect{|ancestor| ancestor.name}.include?('ActiveRecord::Base')
-            model_association = _model_class.reflect_on_association(relationship_name)
-            if model_association
-              options[:class_name] ||= model_association.class_name
-            end
-          end
-
-          @_relationships[relationship_name] = relationship = klass.new(relationship_name, options)
-
-          associated_records_method_name = case relationship
-                                           when JSONAPI::Relationship::ToOne then "record_for_#{relationship_name}"
-                                           when JSONAPI::Relationship::ToMany then "records_for_#{relationship_name}"
-                                           end
-
-          foreign_key = relationship.foreign_key
-
-          define_method "#{foreign_key}=" do |value|
-            @model.method("#{foreign_key}=").call(value)
-          end unless method_defined?("#{foreign_key}=")
-
-          define_method associated_records_method_name do
-            relationship = self.class._relationships[relationship_name]
-            relation_name = relationship.relation_name(context: @context)
-            records_for(relation_name)
-          end unless method_defined?(associated_records_method_name)
-
-          if relationship.is_a?(JSONAPI::Relationship::ToOne)
-            if relationship.belongs_to?
-              define_method foreign_key do
-                @model.method(foreign_key).call
-              end unless method_defined?(foreign_key)
-
-              define_method relationship_name do |options = {}|
-                relationship = self.class._relationships[relationship_name]
-
-                if relationship.polymorphic?
-                  associated_model = public_send(associated_records_method_name)
-                  resource_klass = self.class.resource_for_model(associated_model) if associated_model
-                  return resource_klass.new(associated_model, @context) if resource_klass
-                else
-                  resource_klass = relationship.resource_klass
-                  if resource_klass
-                    associated_model = public_send(associated_records_method_name)
-                    return associated_model ? resource_klass.new(associated_model, @context) : nil
-                  end
-                end
-              end unless method_defined?(relationship_name)
-            else
-              define_method foreign_key do
-                relationship = self.class._relationships[relationship_name]
-
-                record = public_send(associated_records_method_name)
-                return nil if record.nil?
-                record.public_send(relationship.resource_klass._primary_key)
-              end unless method_defined?(foreign_key)
-
-              define_method relationship_name do |options = {}|
-                relationship = self.class._relationships[relationship_name]
-
-                resource_klass = relationship.resource_klass
-                if resource_klass
-                  associated_model = public_send(associated_records_method_name)
-                  return associated_model ? resource_klass.new(associated_model, @context) : nil
-                end
-              end unless method_defined?(relationship_name)
-            end
-          elsif relationship.is_a?(JSONAPI::Relationship::ToMany)
-            define_method foreign_key do
-              records = public_send(associated_records_method_name)
-              return records.collect do |record|
-                record.public_send(relationship.resource_klass._primary_key)
-              end
-            end unless method_defined?(foreign_key)
-
-            define_method relationship_name do |options = {}|
-              relationship = self.class._relationships[relationship_name]
-
-              resource_klass = relationship.resource_klass
-              records = public_send(associated_records_method_name)
-
-              filters = options.fetch(:filters, {})
-              unless filters.nil? || filters.empty?
-                records = resource_klass.apply_filters(records, filters, options)
-              end
-
-              sort_criteria =  options.fetch(:sort_criteria, {})
-              unless sort_criteria.nil? || sort_criteria.empty?
-                order_options = relationship.resource_klass.construct_order_options(sort_criteria)
-                records = resource_klass.apply_sort(records, order_options, @context)
-              end
-
-              paginator = options[:paginator]
-              if paginator
-                records = resource_klass.apply_pagination(records, paginator, order_options)
-              end
-
-              return records.collect do |record|
-                if relationship.polymorphic?
-                  resource_klass = self.class.resource_for_model(record)
-                end
-                resource_klass.new(record, @context)
-              end
-            end unless method_defined?(relationship_name)
-          end
+          JSONAPI::RelationshipBuilder.new(klass, _model_class, options)
+            .define_relationship_methods(relationship_name.to_sym)
         end
+      end
+
+      # Allows JSONAPI::RelationshipBuilder to access metaprogramming hooks
+      def inject_method_definition(name, body)
+        define_method(name, body)
+      end
+
+      def register_relationship(name, relationship_object)
+        @_relationships[name] = relationship_object
       end
 
       private
@@ -1052,6 +1050,18 @@ module JSONAPI
       def check_reserved_relationship_name(name)
         if [:id, :ids, :type, :types].include?(name.to_sym)
           warn "[NAME COLLISION] `#{name}` is a reserved relationship name in #{_resource_name_from_type(_type)}."
+        end
+      end
+
+      def check_duplicate_relationship_name(name)
+        if _relationships.include?(name.to_sym)
+          warn "[DUPLICATE RELATIONSHIP] `#{name}` has already been defined in #{_resource_name_from_type(_type)}."
+        end
+      end
+
+      def check_duplicate_attribute_name(name)
+        if _attributes.include?(name.to_sym)
+          warn "[DUPLICATE ATTRIBUTE] `#{name}` has already been defined in #{_resource_name_from_type(_type)}."
         end
       end
     end

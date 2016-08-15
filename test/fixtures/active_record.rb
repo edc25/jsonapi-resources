@@ -268,6 +268,9 @@ class Person < ActiveRecord::Base
 
   has_and_belongs_to_many :books, join_table: :book_authors
 
+  has_many :even_posts, -> { where('posts.id % 2 = 0') }, class_name: 'Post', foreign_key: 'author_id'
+  has_many :odd_posts, -> { where('posts.id % 2 = 1') }, class_name: 'Post', foreign_key: 'author_id'
+
   ### Validations
   validates :name, presence: true
   validates :date_joined, presence: true
@@ -844,6 +847,13 @@ class PersonResource < BaseResource
 
 end
 
+class PersonWithEvenAndOddPostsResource < JSONAPI::Resource
+  model_name 'Person'
+
+  has_many :even_posts, foreign_key: 'author_id', class_name: 'Post', relation_name: :even_posts
+  has_many :odd_posts, foreign_key: 'author_id', class_name: 'Post', relation_name: :odd_posts
+end
+
 class SpecialBaseResource < BaseResource
   abstract
 
@@ -916,8 +926,8 @@ class PostResource < JSONAPI::Resource
 
   has_one :author, class_name: 'Person'
   has_one :section
-  has_many :tags, acts_as_set: true, eager_load_on_include: false
-  has_many :comments, acts_as_set: false
+  has_many :tags, acts_as_set: true, inverse_relationship: :posts, eager_load_on_include: false
+  has_many :comments, acts_as_set: false, inverse_relationship: :post
 
   # Not needed - just for testing
   primary_key :id
@@ -1078,7 +1088,7 @@ end
 
 class PlanetTypeResource < JSONAPI::Resource
   attributes :name
-  has_many :planets
+  has_many :planets, inverse_relationship: :planet_type
 end
 
 class MoonResource < JSONAPI::Resource
@@ -1160,10 +1170,12 @@ end
 class AuthorResource < JSONAPI::Resource
   model_name 'Person'
   attributes :name
+
+  has_many :books, inverse_relationship: :authors
 end
 
 class BookResource < JSONAPI::Resource
-  has_many :authors, class_name: 'Author'
+  has_many :authors, class_name: 'Author', inverse_relationship: :books
 end
 
 class AuthorDetailResource < JSONAPI::Resource
@@ -1291,6 +1303,10 @@ module Api
       has_one :section
       has_many :comments, acts_as_set: false
 
+      def self.default_sort
+        [{field: 'title', direction: :asc}, {field: 'id', direction: :desc}]
+      end
+
       def subject
         @model.title
       end
@@ -1337,7 +1353,7 @@ module Api
         else
           :book_comments
         end
-      }
+      }, reflect: true
 
       has_many :aliased_comments, class_name: 'BookComments', relation_name: :approved_book_comments
 
@@ -1518,7 +1534,8 @@ module Api
                             else
                               :admin_line_items
                             end
-                          }
+                          },
+               reflect: false
 
       has_many :order_flags, acts_as_set: true,
                relation_name: -> (options = {}) {
@@ -1536,7 +1553,7 @@ module Api
     class OrderFlagResource < JSONAPI::Resource
       attributes :name
 
-      has_many :purchase_orders
+      has_many :purchase_orders, reflect: false
     end
 
     class LineItemResource < JSONAPI::Resource
@@ -1555,8 +1572,6 @@ module Api
 
     class CustomerResource < V6::CustomerResource
       model_name 'Api::V7::Customer'
-      attribute :name
-      has_many :purchase_orders
     end
 
     class ClientResource < JSONAPI::Resource

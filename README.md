@@ -2,6 +2,13 @@
 
 [![Join the chat at https://gitter.im/cerebris/jsonapi-resources](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/cerebris/jsonapi-resources?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
+**NOTE:** This README is the documentation for `JSONAPI::Resources`. If you are viewing this at the
+[project page on Github](https://github.com/cerebris/jsonapi-resources) you are viewing the documentation for the `master`
+branch. This may contain information that is not relevant to the release you are using. Please see the README for the
+[version](https://github.com/cerebris/jsonapi-resources/releases) you are using.
+
+ ---
+
 `JSONAPI::Resources`, or "JR", provides a framework for developing a server that complies with the
 [JSON API](http://jsonapi.org/) specification.
 
@@ -43,6 +50,7 @@ backed by ActiveRecord models or by custom objects.
     * [Key Format] (#key-format)
   * [Routing] (#routing)
     * [Nested Routes] (#nested-routes)
+  * [Authorization](#authorization)
 * [Configuration] (#configuration)
 * [Contributing] (#contributing)
 * [License] (#license)
@@ -333,6 +341,21 @@ The request will look something like:
 GET /books?include=author&sort=author.name
 ```
 
+###### Default sorting
+
+By default JR sorts ascending on the `id` of the primary resource, unless the request specifies an alternate sort order.
+To override this you may override the `self.default_sort` on a `resource`. `default_sort` should return an array of
+`sort_param` hashes. A `sort_param` hash contains a `field` and a `direction`, with `direction` being either `:asc` or
+`:desc`.
+
+For example:
+
+```ruby
+  def self.default_sort
+    [{field: 'name_last', direction: :desc}, {field: 'name_first', direction: :desc}]
+  end
+```
+
 ##### Attribute Formatting
 
 Attributes can have a `Format`. By default all attributes use the default formatter. If an attribute has the `format`
@@ -530,6 +553,9 @@ The relationship methods (`relationship`, `has_one`, and `has_many`) support the
 
 `to_one` relationships support the additional option:
  * `foreign_key_on` - defaults to `:self`. To indicate that the foreign key is on the related resource specify `:related`.
+
+`to_many` relationships support the additional option:
+ * `reflect` - defaults to `true`. To indicate that updates to the relationship are performed on the related resource, if relationship reflection is turned on. See [Configuration] (#configuration)
 
 Examples:
 
@@ -1119,6 +1145,13 @@ Callbacks can be defined for the following `JSONAPI::Resource` events:
 - `:remove_to_one_link`
 - `:replace_fields`
 
+###### Relationship Reflection
+
+By default updates to relationships only invoke callbacks on the primary
+Resource. By setting the `use_relationship_reflection` [Configuration] (#configuration) option
+updates to `has_many` relationships will occur on the related resource, triggering
+callbacks on both resources.
+
 ##### `JSONAPI::Processor` Callbacks
 
 Callbacks can also be defined for `JSONAPI::Processor` events:
@@ -1175,7 +1208,7 @@ rails generate jsonapi:controller contact
 ###### ResourceControllerMetal
 
 `JSONAPI::Resources` also provides an alternative class to `ResourceController` called `ResourceControllerMetal`.
-In order to provide a lighter weight controller option this strips the controller down to just the classes needed 
+In order to provide a lighter weight controller option this strips the controller down to just the classes needed
 to work with `JSONAPI::Resources`.
 
 For example:
@@ -1187,7 +1220,7 @@ end
 ```
 
 Note: This may not provide all of the expected controller capabilities if you are using additional gems such as DoorKeeper.
- 
+
 ###### Serialization Options
 
 Additional options can be passed to the serializer using the `serialization_options` method.
@@ -1223,7 +1256,7 @@ JSONAPI::Resources supports namespacing of controllers and resources. With names
 
 If you namespace your controller it will require a namespaced resource.
 
-In the following example we have a `resource` that isn't namespaced, and one the has now been namespaced. There are
+In the following example we have a `resource` that isn't namespaced, and one that has now been namespaced. There are
 slight differences between the two resources, as might be seen in a new version of an API:
 
 ```ruby
@@ -1863,6 +1896,15 @@ phone_number_contact GET    /phone-numbers/:phone_number_id/contact(.:format) co
 
 ```
 
+### Authorization
+
+Currently `json-api-resources` doesn't come with built-in primitives for authorization. However multiple users of the framework have come up with different approaches, check out:
+
+- [jsonapi-authorization](https://github.com/venuu/jsonapi-authorization)
+- [pundit-resources](https://github.com/togglepro/pundit-resources)
+
+Refer to the comments/discussion [here](https://github.com/cerebris/jsonapi-resources/issues/16#issuecomment-222438975) for the differences between approaches
+
 ## Configuration
 
 JR has a few configuration options. Some have already been mentioned above. To set configuration options create an
@@ -1929,6 +1971,19 @@ JSONAPI.configure do |config|
   # Controls the serialization of resource linkage for non compound documents
   # NOTE: always_include_to_many_linkage_data is not currently implemented
   config.always_include_to_one_linkage_data = false
+
+  # Relationship reflection invokes the related resource when updates
+  # are made to a has_many relationship. By default relationship_reflection
+  # is turned off because it imposes a small performance penalty.
+  config.use_relationship_reflection = false
+
+  # Allows transactions for creating and updating records
+  # Set this to false if your backend does not support transactions (e.g. Mongodb)
+  config.allow_transactions = true
+
+  # Formatter Caching
+  # Set to false to disable caching of string operations on keys and links.
+  config.cache_formatters = true
 end
 ```
 
